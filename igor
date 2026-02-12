@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+#
+# igor: a tool for connecting to lab servers
+#
+# Copyright (c) 2026 Sandipan Das
+#
+# FOR INTERNAL USE ONLY
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.
+#
+
+import argparse
+import enum
+import http
+import os
+import subprocess
+import sys
+import time
+import tomllib
+import urllib3
+
+import platformdirs
+import requests
+
+
+def util__get_config():
+    path = os.path.join(platformdirs.user_config_dir("igor"), "systems.toml")
+    try:
+        with open(path, "rb") as f:
+            config = tomllib.load(f)
+    except:
+        print("error: invalid config")
+        sys.exit()
+    return config
+
+
+def util__ssh(spec):
+    command = "sshpass -p %s ssh -o StrictHostKeyChecking=no -C %s@%s -p %d" % (
+        spec["pass"],
+        spec["user"],
+        spec["addr"],
+        spec["port"],
+    )
+    process = subprocess.Popen(command, shell=True)
+    process.wait()
+
+
+def util__check_response(response):
+    if not response.ok:
+        print(
+            "error: bad response %d (%s)"
+            % (
+                response.status_code,
+                http.client.responses[response.status_code],
+            )
+        )
+        sys.exit()
+
+
+def bmc__get_token(spec):
+    url = "https://%s/login" % spec["addr"]
+    json = {"username": spec["user"], "password": spec["pass"]}
+    response = requests.post(url, json=json, verify=False)
+    response.close()
+    util__check_response(response)
+    return response.json()["token"]
+
+
+def bmc__put_token(spec, token):
+    url = "https://%s/logout" % spec["addr"]
+    headers = {"X-Auth-Token": token}
+    json = {"data": []}
+    response = requests.post(url, headers=headers, json=json, verify=False)
+    response.close()
+    util__check_response(response)
+
+
+class bmc__power_state(enum.Enum):
+    ON = "xyz.openbmc_project.State.Chassis.PowerState.On"
+    OFF = "xyz.openbmc_project.State.Chassis.PowerState.Off"
+
+
+class bmc__transition(enum.Enum):
+    ON = "xyz.openbmc_project.State.Chassis.Transition.On"
+    OFF = "xyz.openbmc_project.State.Chassis.Transition.Off"
+
+
+def bmc__get_power_state(spec, token):
+    url = "https://%s/xyz/openbmc_project/state/chassis0" % spec["addr"]
+    headers = {"X-Auth-Token": token}
+    response = requests.get(url, headers=headers, verify=False)
+    response.close()
+    util__check_response(response)
+    state = response.json()["data"]["CurrentPowerState"]
+    return bmc__power_state(state)
+
+
+def bmc__set_power_state(spec, token, state):
+    url = (
+        "https://%s/xyz/openbmc_project/state/chassis0/attr/RequestedPowerTransition"
+        % spec["addr"]
+    )
+    headers = {"X-Auth-Token": token}
+    json = {"data": state.value}
+    response = requests.put(url, headers=headers, json=json, verify=False)
+    response.close()
+    util__check_response(response)
+
+    state = bmc__power_state[state.name]
+    while state is not bmc__get_power_state(spec, token):
+        time.sleep(1)
+
+
+class pdu__power_state(enum.Enum):
+    ON = 1
+    OFF = 0
+
+
+def pdu__get_power_state(spec):
+    url = "https://%s/model/pdu/0/outlet/%d" % (spec["addr"], spec["port"])
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    json = {"jsonrpc": "2.0", "method": "getState"}
+    response = requests.post(
+        url,
+        headers=headers,
+        json=json,
+        verify=False,
+        auth=(spec["user"], spec["pass"]),
+    )
+    response.close()
+    util__check_response(response)
+    json = response.json()["result"]["_ret_"]
+    state = json["powerState"]
+    return pdu__power_state(state)
+
+
+def pdu__set_power_state(spec, state):
+    url = "https://%s/model/pdu/0/outlet/%d" % (spec["addr"], spec["port"])
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    json = {
+        "jsonrpc": "2.0",
+        "method": "setPowerState",
+        "params": {"pstate": state.value},
+    }
+    response = requests.post(
+        url,
+        headers=headers,
+        json=json,
+        verify=False,
+        auth=(spec["user"], spec["pass"]),
+    )
+    response.close()
+    util__check_response(response)
+
+
+def pdu__cycle_power_state(spec):
+    url = "https://%s/model/pdu/0/outlet/%d" % (spec["addr"], spec["port"])
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    json = {"jsonrpc": "2.0", "method": "cyclePowerState"}
+    response = requests.post(
+        url,
+        headers=headers,
+        json=json,
+        verify=False,
+        auth=(spec["user"], spec["pass"]),
+    )
+    response.close()
+    util__check_response(response)
+
+
+def main():
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    parser = argparse.ArgumentParser("igor")
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument(
+        "--connect",
+        "-c",
+        action="store_true",
+        help="connect to the host over ssh",
+    )
+    action.add_argument(
+        "--console",
+        "-k",
+        action="store_true",
+        help="connect to the serial console over ssh",
+    )
+    action.add_argument(
+        "--get-power",
+        "-q",
+        action="store_true",
+        help="get the host power state of the system",
+    )
+    action.add_argument(
+        "--set-power",
+        "-p",
+        metavar=("STATE"),
+        help="set the host power state of the system",
+    )
+    action.add_argument(
+        "--cycle-power",
+        "-r",
+        action="store_true",
+        help="perform a host power cycle of the system",
+    )
+    action.add_argument(
+        "--get-inlet",
+        "-Q",
+        action="store_true",
+        help="get the inlet power state of the system",
+    )
+    action.add_argument(
+        "--set-inlet",
+        "-P",
+        metavar=("STATE"),
+        help="set the inlet power state of the system",
+    )
+    action.add_argument(
+        "--cycle-inlet",
+        "-R",
+        action="store_true",
+        help="perform a inlet power cycle of the system",
+    )
+    parser.add_argument(
+        "system", metavar="SYSTEM", help="specify the system to be used"
+    )
+    args = parser.parse_args()
+
+    config = util__get_config()
+    if not args.system or args.system not in config.keys():
+        print("error: invalid system")
+        sys.exit()
+
+    system = config[args.system]
+    if not all(k in system.keys() for k in ("host", "bmc", "pdu")):
+        print("error: invalid system")
+        sys.exit()
+
+    host = system["host"]
+    if not all(k in host.keys() for k in ("addr", "user", "pass")):
+        print("error: invalid host")
+        sys.exit()
+
+    # set host defaults
+    if not "port" in host.keys():
+        host["port"] = 22
+
+    bmc = system["bmc"]
+    if not "addr" in bmc.keys():
+        print("error: invalid bmc")
+        sys.exit()
+
+    # set bmc defaults
+    if not "user" in bmc.keys():
+        bmc["user"] = "root"
+    if not "pass" in bmc.keys():
+        bmc["pass"] = "0penBmc"
+    if not "port" in bmc.keys():
+        bmc["port"] = 2200
+
+    pdu = system["pdu"]
+    if not all(k in pdu.keys() for k in ("addr", "port")) or not isinstance(
+        pdu["port"], int
+    ):
+        print("error: invalid pdu")
+        sys.exit()
+
+    # set pdu defaults
+    if not "user" in pdu.keys():
+        pdu["user"] = "admin"
+    if not "pass" in pdu.keys():
+        pdu["pass"] = "raritan"
+
+    if args.connect:
+        util__ssh(host)
+
+    elif args.console:
+        util__ssh(bmc)
+
+    elif args.get_power:
+        token = bmc__get_token(bmc)
+        state = bmc__get_power_state(bmc, token)
+        bmc__put_token(bmc, token)
+        print("info: host power state is %s" % (state.name))
+
+    elif args.set_power:
+        state = args.set_power.upper()
+        if not state in bmc__transition._member_names_:
+            print("error: invalid host power state")
+            sys.exit()
+
+        state = bmc__transition[state]
+        token = bmc__get_token(bmc)
+        bmc__set_power_state(bmc, token, state)
+        bmc__put_token(bmc, token)
+        print("info: host power state is %s" % (state.name))
+
+    elif args.cycle_power:
+        token = bmc__get_token(bmc)
+        state = bmc__get_power_state(bmc, token)
+        if state is bmc__power_state.ON:
+            bmc__set_power_state(bmc, token, bmc__transition.OFF)
+
+        bmc__set_power_state(bmc, token, bmc__transition.ON)
+        bmc__put_token(bmc, token)
+
+    elif args.get_inlet:
+        state = pdu__get_power_state(pdu)
+        print("info: inlet power state is %s" % (state.name))
+
+    elif args.set_inlet:
+        state = args.set_inlet.upper()
+        if not state in pdu__power_state._member_names_:
+            print("error: invalid inlet power state")
+            sys.exit()
+
+        state = pdu__power_state[state]
+        pdu__set_power_state(pdu, state)
+        print("info: inlet power state is %s" % (state.name))
+
+    elif args.cycle_power:
+        state = pdu__power_state[state]
+        if state is pdu__power_state.ON:
+            pdu__cycle_power_state(pdu)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except requests.exceptions.ConnectionError:
+        print("error: connection failed")
