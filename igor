@@ -27,52 +27,55 @@ import requests
 
 def util__get_config():
     path = os.path.join(platformdirs.user_config_dir("igor"), "systems.toml")
-    try:
-        with open(path, "rb") as f:
-            config = tomllib.load(f)
-    except:
-        print("error: invalid config")
-        sys.exit()
+    with open(path, "rb") as f:
+        config = tomllib.load(f)
     return config
 
 
 def util__ssh(spec):
-    command = "sshpass -p %s ssh -o StrictHostKeyChecking=no -C %s@%s -p %d" % (
+    comm = [
+        "sshpass",
+        "-p",
         spec["pass"],
-        spec["user"],
-        spec["addr"],
-        spec["port"],
-    )
-    process = subprocess.Popen(command, shell=True)
-    process.wait()
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-C",
+        f"{spec["user"]}@{spec["addr"]}",
+        "-p",
+        str(spec["port"]),
+    ]
+
+    with subprocess.Popen(comm, shell=False) as process:
+        process.wait()
 
 
 def util__check_response(response):
     if not response.ok:
         print(
-            "error: bad response %d (%s)"
-            % (
-                response.status_code,
-                http.client.responses[response.status_code],
-            )
+            f"error: bad response "
+            f"{response.status_code} "
+            f"({http.client.responses[response.status_code]})"
         )
         sys.exit()
 
 
 def bmc__get_token(spec):
-    url = "https://%s/login" % spec["addr"]
+    url = f"https://{spec["addr"]}/login"
     json = {"username": spec["user"], "password": spec["pass"]}
-    response = requests.post(url, json=json, verify=False)
+    response = requests.post(url, json=json, verify=False, timeout=10)
     response.close()
     util__check_response(response)
     return response.json()["token"]
 
 
 def bmc__put_token(spec, token):
-    url = "https://%s/logout" % spec["addr"]
+    url = f"https://{spec["addr"]}/logout"
     headers = {"X-Auth-Token": token}
     json = {"data": []}
-    response = requests.post(url, headers=headers, json=json, verify=False)
+    response = requests.post(
+        url, headers=headers, json=json, verify=False, timeout=10
+    )
     response.close()
     util__check_response(response)
 
@@ -88,9 +91,9 @@ class bmc__transition(enum.Enum):
 
 
 def bmc__get_power_state(spec, token):
-    url = "https://%s/xyz/openbmc_project/state/chassis0" % spec["addr"]
+    url = f"https://{spec["addr"]}/xyz/openbmc_project/state/chassis0"
     headers = {"X-Auth-Token": token}
-    response = requests.get(url, headers=headers, verify=False)
+    response = requests.get(url, headers=headers, verify=False, timeout=10)
     response.close()
     util__check_response(response)
     state = response.json()["data"]["CurrentPowerState"]
@@ -98,13 +101,12 @@ def bmc__get_power_state(spec, token):
 
 
 def bmc__set_power_state(spec, token, state):
-    url = (
-        "https://%s/xyz/openbmc_project/state/chassis0/attr/RequestedPowerTransition"
-        % spec["addr"]
-    )
+    url = f"https://{spec["addr"]}/xyz/openbmc_project/state/chassis0/attr/RequestedPowerTransition"
     headers = {"X-Auth-Token": token}
     json = {"data": state.value}
-    response = requests.put(url, headers=headers, json=json, verify=False)
+    response = requests.put(
+        url, headers=headers, json=json, verify=False, timeout=10
+    )
     response.close()
     util__check_response(response)
 
@@ -119,7 +121,7 @@ class pdu__power_state(enum.Enum):
 
 
 def pdu__get_power_state(spec):
-    url = "https://%s/model/pdu/0/outlet/%d" % (spec["addr"], spec["port"])
+    url = f"https://{spec["addr"]}/model/pdu/0/outlet/{spec["port"]}"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     json = {"jsonrpc": "2.0", "method": "getState"}
     response = requests.post(
@@ -127,6 +129,7 @@ def pdu__get_power_state(spec):
         headers=headers,
         json=json,
         verify=False,
+        timeout=10,
         auth=(spec["user"], spec["pass"]),
     )
     response.close()
@@ -137,7 +140,7 @@ def pdu__get_power_state(spec):
 
 
 def pdu__set_power_state(spec, state):
-    url = "https://%s/model/pdu/0/outlet/%d" % (spec["addr"], spec["port"])
+    url = f"https://{spec["addr"]}/model/pdu/0/outlet/{spec["port"]}"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     json = {
         "jsonrpc": "2.0",
@@ -149,6 +152,7 @@ def pdu__set_power_state(spec, state):
         headers=headers,
         json=json,
         verify=False,
+        timeout=10,
         auth=(spec["user"], spec["pass"]),
     )
     response.close()
@@ -156,7 +160,7 @@ def pdu__set_power_state(spec, state):
 
 
 def pdu__cycle_power_state(spec):
-    url = "https://%s/model/pdu/0/outlet/%d" % (spec["addr"], spec["port"])
+    url = f"https://{spec["addr"]}/model/pdu/0/outlet/{spec["port"]}"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     json = {"jsonrpc": "2.0", "method": "cyclePowerState"}
     response = requests.post(
@@ -164,6 +168,7 @@ def pdu__cycle_power_state(spec):
         headers=headers,
         json=json,
         verify=False,
+        timeout=10,
         auth=(spec["user"], spec["pass"]),
     )
     response.close()
@@ -243,20 +248,20 @@ def main():
         sys.exit()
 
     # set host defaults
-    if not "port" in host.keys():
+    if "port" not in host.keys():
         host["port"] = 22
 
     bmc = system["bmc"]
-    if not "addr" in bmc.keys():
+    if "addr" not in bmc.keys():
         print("error: invalid bmc")
         sys.exit()
 
     # set bmc defaults
-    if not "user" in bmc.keys():
+    if "user" not in bmc.keys():
         bmc["user"] = "root"
-    if not "pass" in bmc.keys():
+    if "pass" not in bmc.keys():
         bmc["pass"] = "0penBmc"
-    if not "port" in bmc.keys():
+    if "port" not in bmc.keys():
         bmc["port"] = 2200
 
     pdu = system["pdu"]
@@ -267,9 +272,9 @@ def main():
         sys.exit()
 
     # set pdu defaults
-    if not "user" in pdu.keys():
+    if "user" not in pdu.keys():
         pdu["user"] = "admin"
-    if not "pass" in pdu.keys():
+    if "pass" not in pdu.keys():
         pdu["pass"] = "raritan"
 
     if args.connect:
@@ -282,11 +287,11 @@ def main():
         token = bmc__get_token(bmc)
         state = bmc__get_power_state(bmc, token)
         bmc__put_token(bmc, token)
-        print("info: host power state is %s" % (state.name))
+        print(f"info: host power state is {state.name}")
 
     elif args.set_power:
         state = args.set_power.upper()
-        if not state in bmc__transition._member_names_:
+        if state not in bmc__transition._member_names_:
             print("error: invalid host power state")
             sys.exit()
 
@@ -294,7 +299,7 @@ def main():
         token = bmc__get_token(bmc)
         bmc__set_power_state(bmc, token, state)
         bmc__put_token(bmc, token)
-        print("info: host power state is %s" % (state.name))
+        print(f"info: host power state is {state.name}")
 
     elif args.cycle_power:
         token = bmc__get_token(bmc)
@@ -307,17 +312,17 @@ def main():
 
     elif args.get_inlet:
         state = pdu__get_power_state(pdu)
-        print("info: inlet power state is %s" % (state.name))
+        print(f"info: inlet power state is {state.name}")
 
     elif args.set_inlet:
         state = args.set_inlet.upper()
-        if not state in pdu__power_state._member_names_:
+        if state not in pdu__power_state._member_names_:
             print("error: invalid inlet power state")
             sys.exit()
 
         state = pdu__power_state[state]
         pdu__set_power_state(pdu, state)
-        print("info: inlet power state is %s" % (state.name))
+        print(f"info: inlet power state is {state.name}")
 
     elif args.cycle_power:
         state = pdu__power_state[state]
