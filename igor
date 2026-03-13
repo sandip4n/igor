@@ -175,6 +175,59 @@ def pdu__cycle_power_state(spec):
     util__check_response(response)
 
 
+def system__get_host(system):
+    if "host" not in system.keys():
+        sys.exit("error: invalid host")
+
+    host = system["host"]
+    if not all(k in host.keys() for k in ("addr", "user", "pass")):
+        sys.exit("error: invalid host")
+
+    # set host defaults
+    if "port" not in host.keys():
+        host["port"] = 22
+
+    return host
+
+
+def system__get_bmc(system):
+    if "bmc" not in system.keys():
+        sys.exit("error: invalid bmc")
+
+    bmc = system["bmc"]
+    if "addr" not in bmc.keys():
+        sys.exit("error: invalid bmc")
+
+    # set bmc defaults
+    if "user" not in bmc.keys():
+        bmc["user"] = "root"
+    if "pass" not in bmc.keys():
+        bmc["pass"] = "0penBmc"
+    if "port" not in bmc.keys():
+        bmc["port"] = 2200
+
+    return bmc
+
+
+def system__get_pdu(system):
+    if "pdu" not in system.keys():
+        sys.exit("error: invalid pdu")
+
+    pdu = system["pdu"]
+    if not all(k in pdu.keys() for k in ("addr", "port")) or not isinstance(
+        pdu["port"], int
+    ):
+        sys.exit("error: invalid pdu")
+
+    # set pdu defaults
+    if "user" not in pdu.keys():
+        pdu["user"] = "admin"
+    if "pass" not in pdu.keys():
+        pdu["pass"] = "raritan"
+
+    return pdu
+
+
 def main():
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     parser = argparse.ArgumentParser("igor")
@@ -234,66 +287,30 @@ def main():
 
     config = util__get_config()
     if not args.system or args.system not in config.keys():
-        print("error: invalid system")
-        sys.exit()
+        sys.exit("error: invalid system")
 
     system = config[args.system]
-    if not all(k in system.keys() for k in ("host", "bmc", "pdu")):
-        print("error: invalid system")
-        sys.exit()
-
-    host = system["host"]
-    if not all(k in host.keys() for k in ("addr", "user", "pass")):
-        print("error: invalid host")
-        sys.exit()
-
-    # set host defaults
-    if "port" not in host.keys():
-        host["port"] = 22
-
-    bmc = system["bmc"]
-    if "addr" not in bmc.keys():
-        print("error: invalid bmc")
-        sys.exit()
-
-    # set bmc defaults
-    if "user" not in bmc.keys():
-        bmc["user"] = "root"
-    if "pass" not in bmc.keys():
-        bmc["pass"] = "0penBmc"
-    if "port" not in bmc.keys():
-        bmc["port"] = 2200
-
-    pdu = system["pdu"]
-    if not all(k in pdu.keys() for k in ("addr", "port")) or not isinstance(
-        pdu["port"], int
-    ):
-        print("error: invalid pdu")
-        sys.exit()
-
-    # set pdu defaults
-    if "user" not in pdu.keys():
-        pdu["user"] = "admin"
-    if "pass" not in pdu.keys():
-        pdu["pass"] = "raritan"
 
     if args.connect:
+        host = system__get_host(system)
         util__ssh(host)
 
     elif args.console:
+        bmc = system__get_bmc(system)
         util__ssh(bmc)
 
     elif args.get_power:
+        bmc = system__get_bmc(system)
         token = bmc__get_token(bmc)
         state = bmc__get_power_state(bmc, token)
         bmc__put_token(bmc, token)
         print(f"info: host power state is {state.name}")
 
     elif args.set_power:
+        bmc = system__get_bmc(system)
         state = args.set_power.upper()
         if state not in bmc__transition._member_names_:
-            print("error: invalid host power state")
-            sys.exit()
+            sys.exit("error: invalid host power state")
 
         state = bmc__transition[state]
         token = bmc__get_token(bmc)
@@ -302,6 +319,7 @@ def main():
         print(f"info: host power state is {state.name}")
 
     elif args.cycle_power:
+        bmc = system__get_bmc(system)
         token = bmc__get_token(bmc)
         state = bmc__get_power_state(bmc, token)
         if state is bmc__power_state.ON:
@@ -311,20 +329,22 @@ def main():
         bmc__put_token(bmc, token)
 
     elif args.get_inlet:
+        pdu = system__get_pdu(system)
         state = pdu__get_power_state(pdu)
         print(f"info: inlet power state is {state.name}")
 
     elif args.set_inlet:
+        pdu = system__get_pdu(system)
         state = args.set_inlet.upper()
         if state not in pdu__power_state._member_names_:
-            print("error: invalid inlet power state")
-            sys.exit()
+            sys.exit("error: invalid inlet power state")
 
         state = pdu__power_state[state]
         pdu__set_power_state(pdu, state)
         print(f"info: inlet power state is {state.name}")
 
     elif args.cycle_power:
+        pdu = system__get_pdu(system)
         state = pdu__power_state[state]
         if state is pdu__power_state.ON:
             pdu__cycle_power_state(pdu)
