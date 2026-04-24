@@ -1,2 +1,3 @@
 platformdirs
+pyinstaller
 requests
