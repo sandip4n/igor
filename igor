@@ -15,6 +15,7 @@ import argparse
 import enum
 import http
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -33,21 +34,39 @@ def util__get_config():
 
 
 def util__ssh(spec):
-    comm = [
-        "sshpass",
-        "-p",
-        spec["pass"],
-        "ssh",
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-C",
-        f"{spec["user"]}@{spec["addr"]}",
-        "-p",
-        str(spec["port"]),
-    ]
+    system = platform.system()
 
-    with subprocess.Popen(comm, shell=False) as process:
-        process.wait()
+    if system == "Windows":
+        comm = [
+            "plink",
+            "-ssh",
+            f"{spec["user"]}@{spec["addr"]}",
+            "-P",
+            str(spec["port"]),
+            "-pw",
+            spec["pass"],
+        ]
+    else:
+        comm = [
+            "sshpass",
+            "-p",
+            spec["pass"],
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-C",
+            f"{spec["user"]}@{spec["addr"]}",
+            "-p",
+            str(spec["port"]),
+        ]
+
+    try:
+        with subprocess.Popen(comm, shell=False) as process:
+            process.wait()
+    except KeyboardInterrupt:
+        pass
 
 
 def util__check_response(response):
